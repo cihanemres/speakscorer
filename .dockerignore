@@ -1,0 +1,42 @@
+# ─── Sırlar / yapılandırma (ASLA imaja girmemeli) ───
+.env
+*.env
+!.env.example
+# *.env deseni .env.production'ı yakalamaz — açıkça hariç tut.
+.env.production
+!.env.production.example
+
+# ─── Kalıcı veri (host volume bind-mount'ları imaja girmemeli) ───
+/data/
+
+# ─── Python sanal ortamı (Windows venv; Linux imajında işe yaramaz) ───
+venv/
+.venv/
+env/
+**/venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ─── Yerel veritabanı ve kullanıcı yüklemeleri ───
+backend/speakai.db
+backend/speakai.db-journal
+*.sqlite
+*.sqlite3
+backend/uploads/
+
+# ─── Git / IDE / OS ───
+.git/
+.gitignore
+.idea/
+.vscode/
+.claude/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ─── Dokümantasyon / önizleme görselleri (imaj boyutunu küçült) ───
+onizleme-*.png
+*.md
+!KULLANIM_KILAVUZU.md

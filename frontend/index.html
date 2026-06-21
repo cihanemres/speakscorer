@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="description" content="SpeakScorer - Yapay Zeka Destekli İngilizce Konuşma Platformu">
+    <meta name="theme-color" content="#0a0e1a">
+    <title>SpeakScorer — Giriş</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=3">
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <style>
+        /* Giriş ekranına özel düzen (landing hissi) */
+        .auth-shell {
+            width: 100%; max-width: 980px;
+            display: grid; grid-template-columns: 1fr; gap: clamp(1.5rem, 4vw, 3rem);
+            align-items: center;
+        }
+        .auth-hero { display: none; }
+        @media (min-width: 900px) {
+            .auth-shell { grid-template-columns: 1.05fr 0.95fr; }
+            .auth-hero { display: block; animation: rise 0.8s cubic-bezier(.2,.8,.2,1) both; }
+        }
+        .hero-badge {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 0.4rem 0.9rem; border-radius: 999px;
+            background: var(--surface-1); border: 1px solid var(--border);
+            font-size: var(--font-xs); font-weight: 700; color: var(--text-2); margin-bottom: var(--space-lg);
+        }
+        .hero-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 10px var(--lime); }
+        .hero-title {
+            font-family: var(--font-display); font-weight: 800;
+            font-size: clamp(2.4rem, 1.5rem + 3vw, 3.6rem); line-height: 1.05;
+            letter-spacing: -0.03em; margin-bottom: var(--space-md);
+        }
+        .hero-sub { color: var(--text-2); font-size: var(--font-lg); max-width: 30ch; margin-bottom: var(--space-xl); }
+        .hero-feats { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+        .hero-feat {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 0.55rem 0.95rem; border-radius: 999px;
+            background: var(--glass); border: 1px solid var(--border);
+            font-size: var(--font-sm); font-weight: 600; color: var(--text-1);
+            box-shadow: var(--shadow-sm);
+        }
+        .hero-wave { display: flex; align-items: flex-end; gap: 5px; height: 46px; margin-top: var(--space-xl); }
+        .hero-wave span {
+            width: 6px; border-radius: 99px; background: var(--grad-brand);
+            animation: wave 1.3s ease-in-out infinite;
+        }
+        @media (prefers-reduced-motion: reduce) { .hero-wave span { height: 18px !important; } }
+    </style>
+</head>
+<body>
+    <div class="auth-page">
+        <div class="auth-shell">
+            <!-- Sol: landing tanıtımı (yalnızca geniş ekran) -->
+            <section class="auth-hero">
+                <span class="hero-badge"><span class="dot"></span> Yapay zekâ destekli konuşma pratiği</span>
+                <h1 class="hero-title">Konuş,<br><span class="text-gradient">parla.</span></h1>
+                <p class="hero-sub">İngilizce'yi sesli pratikle öğren. Anında AI geri bildirimi al, seviye atla, rozet topla.</p>
+                <div class="hero-feats">
+                    <span class="hero-feat">🎙️ Sesli kayıt</span>
+                    <span class="hero-feat">🤖 AI puanlama</span>
+                    <span class="hero-feat">🔥 Günlük seri</span>
+                    <span class="hero-feat">🏆 Sıralama</span>
+                </div>
+                <div class="hero-wave" aria-hidden="true">
+                    <span style="height:18px;animation-delay:0s"></span>
+                    <span style="height:38px;animation-delay:.1s"></span>
+                    <span style="height:26px;animation-delay:.2s"></span>
+                    <span style="height:46px;animation-delay:.3s"></span>
+                    <span style="height:30px;animation-delay:.4s"></span>
+                    <span style="height:42px;animation-delay:.5s"></span>
+                    <span style="height:20px;animation-delay:.6s"></span>
+                    <span style="height:34px;animation-delay:.7s"></span>
+                    <span style="height:24px;animation-delay:.8s"></span>
+                </div>
+            </section>
+
+            <!-- Sağ: giriş / kayıt kartı -->
+            <div class="auth-card">
+                <div class="auth-header">
+                    <div class="logo" aria-hidden="true">🎙️</div>
+                    <h1>SpeakScorer</h1>
+                    <p>Yapay Zekâ Destekli İngilizce Konuşma Platformu</p>
+                </div>
+
+                <div class="auth-tabs" id="auth-tabs" role="tablist">
+                    <button class="auth-tab active" role="tab" aria-selected="true" onclick="switchTab('login')">Giriş Yap</button>
+                    <button class="auth-tab" role="tab" aria-selected="false" onclick="switchTab('register')">Kayıt Ol</button>
+                </div>
+
+                <div id="alert-area"></div>
+
+                <!-- Giriş Formu -->
+                <form id="login-form" onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label class="form-label" for="login-email">E-Posta</label>
+                        <input type="email" id="login-email" class="form-input" placeholder="E-posta adresiniz" autocomplete="email" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="login-password">Şifre</label>
+                        <input type="password" id="login-password" class="form-input" placeholder="Şifreniz" autocomplete="current-password" required>
+                    </div>
+                    <div id="captcha-login" class="mb-md"></div>
+                    <button type="submit" class="btn btn-primary btn-lg w-full" id="login-btn">
+                        Giriş Yap
+                    </button>
+                </form>
+
+                <!-- Kayıt Formu -->
+                <form id="register-form" class="hidden" onsubmit="handleRegister(event)">
+                    <div class="form-group">
+                        <label class="form-label" for="reg-name">Ad Soyad</label>
+                        <input type="text" id="reg-name" class="form-input" placeholder="Tam adınız" autocomplete="name" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="reg-email">E-Posta</label>
+                        <input type="email" id="reg-email" class="form-input" placeholder="E-posta adresiniz" autocomplete="email" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="reg-password">Şifre</label>
+                        <input type="password" id="reg-password" class="form-input" placeholder="Şifre oluşturun" autocomplete="new-password" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="reg-role">Rol</label>
+                        <select id="reg-role" class="form-select" onchange="toggleClassField()">
+                            <option value="ogrenci">Öğrenci</option>
+                            <option value="ogretmen">Öğretmen</option>
+                            <option value="veli">Veli</option>
+                        </select>
+                    </div>
+                    <div class="flex gap-sm hidden" id="class-group" style="align-items:flex-end; margin-bottom:var(--space-lg)">
+                        <div style="flex:1">
+                            <label class="form-label" for="reg-class">Sınıf Düzeyi</label>
+                            <select id="reg-class" class="form-select">
+                                <option value="5">5. Sınıf</option>
+                                <option value="6">6. Sınıf</option>
+                                <option value="7">7. Sınıf</option>
+                                <option value="8">8. Sınıf</option>
+                                <option value="9">9. Sınıf</option>
+                                <option value="10">10. Sınıf</option>
+                                <option value="11">11. Sınıf</option>
+                                <option value="12">12. Sınıf</option>
+                            </select>
+                        </div>
+                        <div style="flex:1">
+                            <label class="form-label" for="reg-branch">Şube</label>
+                            <input type="text" id="reg-branch" class="form-input" placeholder="Örn: A, B, C" maxlength="2">
+                        </div>
+                    </div>
+                    <div id="captcha-register" class="mb-md"></div>
+                    <button type="submit" class="btn btn-primary btn-lg w-full" id="reg-btn">
+                        Kayıt Ol
+                    </button>
+                </form>
+
+                <div class="mt-lg text-center text-sm text-muted hidden" id="demo-credentials">
+                    <p>Demo hesaplar:</p>
+                    <p style="margin-top:4px">admin@speakscorer.com • ogretmen@speakscorer.com</p>
+                    <p>ogrenci@speakscorer.com • veli@speakscorer.com</p>
+                    <p style="margin-top:2px;color:var(--text-3)">Şifre: [rol]123</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+    <script>
+        if (Auth.isLoggedIn()) window.location.href = '/app/dashboard.html';
+
+        // CAPTCHA durumu (Cloudflare Turnstile)
+        let CAPTCHA_ENABLED = false;
+        let TURNSTILE_SITE_KEY = '';
+        let _captchaWidgets = {};
+
+        // Show demo credentials only when backend is in demo mode + CAPTCHA kurulumu
+        fetch('/api/config/public')
+            .then(r => r.json())
+            .then(cfg => {
+                if (cfg.demo_mode) {
+                    const el = document.getElementById('demo-credentials');
+                    if (el) el.classList.remove('hidden');
+                }
+                CAPTCHA_ENABLED = !!cfg.captcha_enabled;
+                TURNSTILE_SITE_KEY = cfg.turnstile_site_key || '';
+                if (CAPTCHA_ENABLED && TURNSTILE_SITE_KEY) renderCaptchas();
+            })
+            .catch(() => {});  // Silently ignore if endpoint unavailable
+
+        function renderCaptchas() {
+            // Turnstile script'i asenkron yüklenir; hazır olana kadar bekle.
+            if (!window.turnstile) { setTimeout(renderCaptchas, 200); return; }
+            try {
+                _captchaWidgets.login = turnstile.render('#captcha-login', { sitekey: TURNSTILE_SITE_KEY, theme: 'dark' });
+                _captchaWidgets.register = turnstile.render('#captcha-register', { sitekey: TURNSTILE_SITE_KEY, theme: 'dark' });
+            } catch (e) { /* zaten render edilmiş olabilir */ }
+        }
+
+        function captchaToken(which) {
+            if (!CAPTCHA_ENABLED) return null;
+            try { return window.turnstile ? turnstile.getResponse(_captchaWidgets[which]) : ''; }
+            catch (e) { return ''; }
+        }
+
+        function resetCaptcha(which) {
+            if (CAPTCHA_ENABLED && window.turnstile && _captchaWidgets[which] != null) {
+                try { turnstile.reset(_captchaWidgets[which]); } catch (e) {}
+            }
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.auth-tab').forEach((t, i) => {
+                const on = (tab === 'login' && i === 0) || (tab === 'register' && i === 1);
+                t.classList.toggle('active', on);
+                t.setAttribute('aria-selected', on ? 'true' : 'false');
+            });
+            document.getElementById('login-form').classList.toggle('hidden', tab !== 'login');
+            document.getElementById('register-form').classList.toggle('hidden', tab !== 'register');
+        }
+
+        function toggleClassField() {
+            const role = document.getElementById('reg-role').value;
+            document.getElementById('class-group').classList.toggle('hidden', role !== 'ogrenci');
+        }
+
+        // Initialize state
+        toggleClassField();
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            const btn = document.getElementById('login-btn');
+            const token = captchaToken('login');
+            if (CAPTCHA_ENABLED && !token) {
+                showAlert('Lütfen CAPTCHA doğrulamasını tamamlayın.', 'warning', document.getElementById('alert-area'));
+                return;
+            }
+            btn.disabled = true; btn.textContent = 'Giriş yapılıyor...';
+            try {
+                // Token artık HttpOnly cookie ile döner; gövdede sadece kullanıcı + csrf var.
+                const result = await apiPost('/api/auth/login', {
+                    email: document.getElementById('login-email').value,
+                    password: document.getElementById('login-password').value,
+                    captcha_token: token,
+                });
+                Auth.setUser(result.user);
+                window.location.href = '/app/dashboard.html';
+            } catch (err) {
+                resetCaptcha('login');
+                showAlert(err.message, 'error', document.getElementById('alert-area'));
+            } finally { btn.disabled = false; btn.textContent = 'Giriş Yap'; }
+        }
+
+        async function handleRegister(e) {
+            e.preventDefault();
+            const btn = document.getElementById('reg-btn');
+            const token = captchaToken('register');
+            if (CAPTCHA_ENABLED && !token) {
+                showAlert('Lütfen CAPTCHA doğrulamasını tamamlayın.', 'warning', document.getElementById('alert-area'));
+                return;
+            }
+            btn.disabled = true; btn.textContent = 'Hesap oluşturuluyor...';
+            try {
+                const role = document.getElementById('reg-role').value;
+                const result = await apiPost('/api/auth/register', {
+                    ad_soyad: document.getElementById('reg-name').value,
+                    email: document.getElementById('reg-email').value,
+                    password: document.getElementById('reg-password').value,
+                    rol: role,
+                    sinif_duzeyi: role === 'ogrenci' ? parseInt(document.getElementById('reg-class').value) : null,
+                    sube: role === 'ogrenci' ? document.getElementById('reg-branch').value.toUpperCase() : null,
+                    captcha_token: token,
+                });
+                // Herkese açık kayıtlar her zaman yönetici onayı bekler.
+                showAlert('Hesap oluşturuldu! Yönetici onayı bekleniyor.', 'warning', document.getElementById('alert-area'));
+                switchTab('login');
+            } catch (err) {
+                resetCaptcha('register');
+                showAlert(err.message, 'error', document.getElementById('alert-area'));
+            } finally { btn.disabled = false; btn.textContent = 'Kayıt Ol'; }
+        }
+    </script>
+</body>
+</html>

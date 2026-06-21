@@ -1,0 +1,32 @@
+# ─────────────────────────────────────────────────────────────
+# SpeakAI — Caddy reverse proxy (otomatik HTTPS)
+#
+# {$DOMAIN} ve {$ACME_EMAIL} değerleri docker-compose.yml üzerinden
+# .env.production'dan gelir. Caddy bu alan adı için Let's Encrypt'ten
+# ÜCRETSIZ sertifikayı otomatik alır ve yeniler; 80→443 yönlendirir.
+#
+# ÖN KOŞUL: DOMAIN, VM'in public IP'sine DNS A kaydı ile işaret etmeli
+# (örn. DuckDNS) ve VM'de 80 + 443 portları açık olmalı. Aksi halde
+# Let's Encrypt doğrulaması başarısız olur.
+# ─────────────────────────────────────────────────────────────
+
+{$DOMAIN} {
+	# Let's Encrypt sertifika bildirimleri için e-posta
+	tls {$ACME_EMAIL}
+
+	# İç ağdaki uygulama konteynerine yönlendir (port host'a açık değil)
+	reverse_proxy app:7860
+
+	# Yanıtları sıkıştır
+	encode zstd gzip
+
+	# Güvenlik başlıklarının ÇOĞU uygulama middleware'inde (CSP/HSTS/X-Frame
+	# vb.) zaten ayarlanıyor; burada tekrarlamıyoruz ki çift başlık olmasın.
+	# Caddy yalnızca TLS sonlandırma + proxy görevini üstlenir.
+
+	# Erişim/hata logları (docker logs caddy ile görünür)
+	log {
+		output stdout
+		format console
+	}
+}

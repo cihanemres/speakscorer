@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────
+# SpeakAI — Üretim compose (Google Cloud / Oracle Always Free vb. VM)
+#
+# Kalıcılık (KRİTİK): SQLite veritabanı ve yüklenen ses dosyaları
+# host diskindeki ./data altına bind-mount edilir. Böylece konteyner
+# güncellense/silinse bile veriler VM diskinde KALIR.
+#
+# HTTPS: caddy servisi alan adın için Let's Encrypt'ten otomatik,
+# ücretsiz sertifika alır ve 443'ü app:7860'a yönlendirir.
+#
+# Çalıştırma:  docker compose --env-file .env.production up -d --build
+# Loglar:      docker compose logs -f
+# Güncelleme:  git pull && docker compose up -d --build
+# ─────────────────────────────────────────────────────────────
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: speakai:latest
+    restart: unless-stopped
+    # Sırlar ve ortam ayarları .env.production dosyasından gelir
+    # (bu dosya repoda DEĞİL — .env.production.example'dan üretilir).
+    env_file:
+      - .env.production
+    environment:
+      # Üretim sertleştirmesi (Secure cookie, /docs kapalı, HSTS vb.)
+      ENVIRONMENT: production
+      # SQLite veritabanını kalıcı volume'a yönlendir (4 eğik çizgi = mutlak yol).
+      # Varsayılan ./speakai.db konteyner içinde kalırdı ve güncellemede silinirdi.
+      DATABASE_URL: "sqlite:////app/data/speakai.db"
+    volumes:
+      # Veritabanı dosyası host diskinde kalıcı: ./data/db/speakai.db
+      - ./data/db:/app/data
+      # Yüklenen ses kayıtları / avatarlar host diskinde kalıcı
+      - ./data/uploads:/app/backend/uploads
+    # Port host'a AÇILMAZ; sadece iç ağ üzerinden caddy erişir.
+    expose:
+      - "7860"
+    networks:
+      - speakai-net
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Caddyfile içinde {$DOMAIN} ve {$ACME_EMAIL} olarak kullanılır.
+      DOMAIN: "${DOMAIN}"
+      ACME_EMAIL: "${ACME_EMAIL}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Sertifikalar ve Caddy durumu kalıcı (her yeniden başlatmada yeniden
+      # sertifika almasın — Let's Encrypt oran sınırına takılmamak için şart).
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - speakai-net
+
+networks:
+  speakai-net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

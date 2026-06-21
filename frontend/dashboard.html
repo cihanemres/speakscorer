@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0e1a">
+    <title>SpeakScorer — Panel</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=4">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="dashboard-layout">
+        <aside class="sidebar" id="sidebar"></aside>
+        <main class="dashboard-content" id="main-content">
+            <div class="flex-center" style="height:60vh"><div class="spinner" role="status" aria-label="Yükleniyor"></div></div>
+        </main>
+    </div>
+
+    <script src="/static/js/app.js?v=4"></script>
+    <script>
+        // Chart.js global teması (yeni palet)
+        if (window.Chart) {
+            Chart.defaults.color = '#6b7a8d';
+            Chart.defaults.font.family = "'Plus Jakarta Sans', system-ui, sans-serif";
+            Chart.defaults.borderColor = 'rgba(255,255,255,0.06)';
+        }
+
+        const user = initDashboard();
+        if (user) loadPage('dashboard');
+
+        function navigate(page) {
+            setActiveNav(page);
+            closeDrawer();
+            loadPage(page);
+        }
+
+        function loadPage(page) {
+            const mc = document.getElementById('main-content');
+            mc.innerHTML = '<div class="flex-center" style="height:50vh"><div class="spinner" role="status" aria-label="Yükleniyor"></div></div>';
+            const r = user.rol;
+            const handlers = {
+                'dashboard': () => r==='ogrenci'?studentDashboard():r==='ogretmen'?teacherDashboard():r==='veli'?parentDashboard():adminDashboard(),
+                'tasks': studentTasks,
+                'results': studentResults,
+                'progress': studentProgress,
+                'leaderboard': studentLeaderboard,
+                'badges': studentBadges,
+                'assignments': teacherAssignments,
+                'submissions': () => r==='yonetici'?adminSubmissions():teacherSubmissions(),
+                'students': teacherStudents,
+                'paragraphs': () => r==='yonetici'?adminParagraphs():teacherParagraphs(),
+                'children': parentDashboard,
+                'users': adminUsers,
+                'stats': adminStats,
+                'profile': loadProfile,
+            };
+            const handler = handlers[page];
+            if (handler) handler();
+        }
+
+        // Render sonrası animasyonları (puan dairesi, sayı say-up, XP bar) tetikle.
+        function done(mc) { activateAnimations(mc || document.getElementById('main-content')); }
+
+        // ═══════════════════════════════════════════════════
+        // ÖĞRENCİ PANELİ
+        // ═══════════════════════════════════════════════════
+        // Rozet kataloğu (kilitli olanları da göstermek için — backend BADGE_CRITERIA ile aynı)
+        const BADGE_CATALOG = [
+            { type: 'ilk_adim', icon: '🌟', name: 'İlk Adım' },
+            { type: 'hizli_konusmaci', icon: '⚡', name: 'Hızlı Konuşmacı' },
+            { type: 'pratik_ustasi', icon: '🎯', name: 'Pratik Ustası' },
+            { type: 'soz_ustasi', icon: '📚', name: 'Söz Ustası' },
+            { type: 'yuksek_puan', icon: '⭐', name: 'Yüksek Puan' },
+            { type: 'mukemmel_puan', icon: '🏆', name: 'Mükemmel Puan' },
+            { type: 'istikrarli', icon: '💪', name: 'İstikrarlı Öğrenci' },
+            { type: 'yildiz_ogrenci', icon: '🌟', name: 'Yıldız Öğrenci' },
+        ];
+        const WEEK_DAYS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+
+        async function studentDashboard() {
+            const mc = document.getElementById('main-content');
+            try {
+                const [progress, tasks, gamification] = await Promise.all([
+                    apiGet('/api/student/progress'),
+                    apiGet('/api/student/tasks'),
+                    apiGet('/api/student/gamification'),
+                ]);
+                const pendingTasks = tasks.filter(t => !t.submitted).length;
+                const pct = gamification.xp.progress.progress;
+                const earnedTypes = new Set((gamification.badges.earned || []).map(b => b.type));
+
+                // Haftalık streak gün kutucukları: bugüne kadar üst üste `streak` gün işaretli.
+                const todayIdx = (new Date().getDay() + 6) % 7; // Pzt=0 ... Paz=6
+                const streak = gamification.streak.current || 0;
+                const dayDots = WEEK_DAYS.map((d, i) => {
+                    const on = i <= todayIdx && (todayIdx - i) < streak;
+                    return `<div class="day-dot ${on ? 'on' : ''}"><span class="dd-circle">${on ? '✓' : ''}</span><span>${d}</span></div>`;
+                }).join('');
+
+                // Rozet ızgarası (açık / kilitli)
+                const badgeGrid = BADGE_CATALOG.map(b => {
+                    const on = earnedTypes.has(b.type);
+                    return `<div class="badge-cell ${on ? 'on' : 'off'}">
+                        <div class="bc-ring">${on ? b.icon : '🔒'}</div>
+                        <div class="bc-name">${esc(b.name)}</div>
+                        <div class="bc-lock">${on ? 'AÇILDI' : 'Kilitli'}</div>
+                    </div>`;
+                }).join('');
+
+                // Son aktiviteler (ilerleme geçmişinden, en yeni üstte)
+                const recent = (progress.history || []).slice(-5).reverse();
+                const recentRows = recent.length ? recent.map((h, i) => {
+                    const sc = Math.round(h.score);
+                    const xp = 10 + (sc >= 95 ? 25 : sc >= 80 ? 15 : 0);
+                    return `<div class="activity-row ${i === 0 ? 'hot' : ''}">
+                        <span class="ar-date">${esc(h.date)}</span>
+                        <span class="ar-text">${esc(h.title) || 'Gönderim'} · %${sc}</span>
+                        <span class="ar-pts">+${xp} XP</span>
+                    </div>`;
+                }).join('') : '<p class="text-sm text-muted" style="padding:var(--space-md)">Henüz aktivite yok</p>';
+
+                mc.innerHTML = `
+                    <div class="page-header"><h1>Selam, <span class="text-gradient">${esc(user.ad_soyad)}</span> 👋</h1></div>
+                    <div class="gami-grid">
+                        <!-- SOL: profil / seviye / streak / rozetler -->
+                        <div class="panel level-card">
+                            <div class="level-id">
+                                <div class="level-orb"><span>${gamification.xp.level}</span></div>
+                                <div>
+                                    <div class="level-name">${esc(user.ad_soyad)}</div>
+                                    <span class="level-tag">${esc(gamification.xp.level_name)}</span>
+                                </div>
+                            </div>
+
+                            <div class="level-big">Seviye ${gamification.xp.level}</div>
+                            <div class="xp-row">
+                                <span class="text-sm text-secondary">Deneyim Puanı (XP)</span>
+                                <span class="xp-nums">${gamification.xp.progress.current} / ${gamification.xp.progress.needed} XP</span>
+                            </div>
+                            <div class="xp-bar" role="progressbar" aria-valuenow="${Math.round(pct)}" aria-valuemin="0" aria-valuemax="100">
+                                <div class="xp-bar-fill" data-fill="${pct}"></div>
+                            </div>
+                            <div class="text-xs text-muted mt-sm">Toplam <span class="countup" data-to="${gamification.xp.total}">0</span> XP · %${Math.round(pct)} sonraki seviyeye</div>
+
+                            <div class="streak-week">
+                                <div class="sw-head"><span class="sw-fire">🔥</span><span class="sw-count">${streak} GÜNLÜK SERİ!</span></div>
+                                <div class="day-dots">${dayDots}</div>
+                            </div>
+
+                            <div style="margin-top:var(--space-xl)">
+                                <h3 style="font-size:var(--font-md);margin-bottom:var(--space-sm)">Başarı Rozetleri</h3>
+                                <div class="badge-grid">${badgeGrid}</div>
+                            </div>
+                        </div>
+
+                        <!-- SAĞ: akademik ilerleme + hızlı istatistik + aktivite -->
+                        <div style="display:flex;flex-direction:column;gap:var(--space-lg)">
+                            <div class="panel" style="padding:var(--space-lg)">
+                                <h3 style="margin-bottom:var(--space-md)">📈 Akademik İlerleme Takibi</h3>
+                                <div style="display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:var(--space-lg);align-items:stretch">
+                                    <div class="chart-box" style="height:240px"><canvas id="progress-chart"></canvas></div>
+                                    <div style="display:flex;flex-direction:column;gap:var(--space-md)">
+                                        <div class="panel quickstat"><span class="qs-label">Ort. Puan</span><span class="qs-val text-gradient">%${Math.round(progress.avg_score)}</span></div>
+                                        <div class="panel quickstat"><span class="qs-label">Tamamlanan</span><span class="qs-val">${progress.total_submissions}</span></div>
+                                        <div class="panel quickstat"><span class="qs-label">Bekleyen Ödev</span><span class="qs-val" style="color:var(--amber)">${pendingTasks}</span></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="panel" style="padding:var(--space-lg)">
+                                <h3 style="margin-bottom:var(--space-sm)">🕘 Son Aktiviteler</h3>
+                                ${recentRows}
+                            </div>
+                        </div>
+                    </div>
+                `;
+                done(mc);
+                if (progress.history && progress.history.length > 0) {
+                    new Chart(document.getElementById('progress-chart').getContext('2d'), {
+                        type: 'line',
+                        data: { labels: progress.history.map(h => h.date), datasets: [{ label: 'Puan', data: progress.history.map(h => h.score), borderColor: '#a855f7', backgroundColor: (ctx) => { const g = ctx.chart.ctx.createLinearGradient(0,0,0,240); g.addColorStop(0,'rgba(168,85,247,0.35)'); g.addColorStop(1,'rgba(34,211,238,0.02)'); return g; }, fill: true, tension: 0.4, pointRadius: 4, pointBackgroundColor: '#22d3ee', pointBorderColor: '#fff', borderWidth: 3 }] },
+                        options: { responsive: true, maintainAspectRatio: false, scales: { y: { min:0, max:100, grid:{color:'rgba(255,255,255,0.06)'} }, x: { grid:{display:false} } }, plugins: { legend:{display:false} } }
+                    });
+                }
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function studentTasks() {
+            const mc = document.getElementById('main-content');
+            try {
+                const tasks = await apiGet('/api/student/tasks');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>📝 Ödevlerim</h1></div>
+                    ${tasks.length === 0 ? '<div class="card"><div class="empty-state"><div class="empty-icon">📭</div><p>Henüz ödev atanmadı</p></div></div>' :
+                    `<div class="grid grid-2 stagger">${tasks.map(t => `
+                        <div class="task-card">
+                            <div class="flex-between mb-md">
+                                <span class="badge badge-primary">Seviye ${t.paragraph_level}</span>
+                                ${t.submitted ? getStatusBadge(t.status) : '<span class="badge badge-warning">BEKLİYOR</span>'}
+                            </div>
+                            <h3 style="margin-bottom:var(--space-sm)">${esc(t.paragraph_title)}</h3>
+                            <p class="text-sm text-secondary" style="margin-bottom:var(--space-md);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">${esc(t.paragraph_text)}</p>
+                            ${t.due_date ? `<p class="text-xs text-muted mb-md">⏰ Son tarih: ${formatDate(t.due_date)}</p>` : ''}
+                            ${t.submitted ?
+                                `<div class="flex-between"><span class="text-sm">Puan: ${getScoreBadge(t.score)}</span></div>` :
+                                `<button class="btn btn-primary w-full" onclick="window.location.href='/app/student/record.html?id=${t.assignment_id}'">🎙️ Kayda Başla</button>`
+                            }
+                        </div>
+                    `).join('')}</div>`}
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function studentResults() {
+            const mc = document.getElementById('main-content');
+            try {
+                const results = await apiGet('/api/student/results');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>🎯 Gönderimlerim</h1></div>
+                    ${results.length === 0 ? '<div class="card"><div class="empty-state"><div class="empty-icon">📊</div><p>Henüz gönderim yok</p></div></div>' :
+                    results.map(r => `
+                        <div class="card">
+                            <div class="flex-between mb-md">
+                                <h3>${esc(r.paragraph_title)}</h3>
+                                <div class="flex gap-sm" style="align-items:center">
+                                    ${getStatusBadge(r.status)}
+                                    <span class="text-xs text-muted">${formatDate(r.created_at)}</span>
+                                </div>
+                            </div>
+                            <div class="grid grid-2" style="gap:var(--space-xl)">
+                                <div>
+                                    <div class="flex" style="gap:var(--space-xl);align-items:center;margin-bottom:var(--space-lg)">
+                                        ${buildScoreCircle(r.final_score)}
+                                        <div>
+                                            <div class="text-sm text-secondary">Nihai Puan</div>
+                                            <div style="font-family:var(--font-display);font-size:var(--font-3xl);font-weight:800">${Math.round(r.final_score || 0)}<span class="text-sm text-muted">/100</span></div>
+                                            ${r.teacher_score ? '<div class="text-xs" style="color:var(--green)">Öğretmen değerlendirdi ✓</div>' : '<div class="text-xs text-muted">AI puanı</div>'}
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-2" style="gap:var(--space-sm); margin-bottom:var(--space-md)">
+                                        <div style="padding:var(--space-md);background:var(--surface-1);border-radius:var(--radius-md)"><div class="text-xs text-muted">Kelime · AI/Öğr.</div><div style="font-weight:800">${r.ai_vocabulary || 0}/25 · ${r.teacher_vocabulary != null ? r.teacher_vocabulary : '—'}</div></div>
+                                        <div style="padding:var(--space-md);background:var(--surface-1);border-radius:var(--radius-md)"><div class="text-xs text-muted">Dilbilgisi · AI/Öğr.</div><div style="font-weight:800">${r.ai_grammar || 0}/25 · ${r.teacher_grammar != null ? r.teacher_grammar : '—'}</div></div>
+                                        <div style="padding:var(--space-md);background:var(--surface-1);border-radius:var(--radius-md)"><div class="text-xs text-muted">Akıcılık · AI/Öğr.</div><div style="font-weight:800">${r.ai_fluency || 0}/25 · ${r.teacher_fluency != null ? r.teacher_fluency : '—'}</div></div>
+                                        <div style="padding:var(--space-md);background:var(--surface-1);border-radius:var(--radius-md)"><div class="text-xs text-muted">Bütünlük · AI/Öğr.</div><div style="font-weight:800">${r.ai_coherence || 0}/25 · ${r.teacher_coherence != null ? r.teacher_coherence : '—'}</div></div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <h4 style="margin-bottom:var(--space-sm)">📝 Transkript</h4>
+                                    <p class="text-sm text-secondary" style="padding:var(--space-md);background:var(--surface-1);border-radius:var(--radius-md);margin-bottom:var(--space-md)">${esc(r.transcript) || 'Transkript yok'}</p>
+                                    <h4 style="margin-bottom:var(--space-sm)">🤖 AI Geri Bildirim</h4>
+                                    <p class="text-sm" style="color:#67e8f9">${esc(r.ai_feedback) || 'Geri bildirim yok'}</p>
+                                    ${r.teacher_feedback ? `<h4 style="margin:var(--space-md) 0 var(--space-sm)">👨‍🏫 Öğretmen Geri Bildirimi</h4><p class="text-sm" style="color:var(--green)">${esc(r.teacher_feedback)}</p>` : ''}
+                                    ${r.audio_path ? `<audio controls src="${esc(r.audio_path)}" style="width:100%;margin-top:var(--space-md)"></audio>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function studentProgress() {
+            const mc = document.getElementById('main-content');
+            try {
+                const progress = await apiGet('/api/student/progress');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>📈 İlerleme</h1></div>
+                    <div class="grid grid-4 stagger" style="margin-bottom:var(--space-xl)">
+                        <div class="stat-card"><div class="stat-value countup" data-to="${progress.total_submissions}">0</div><div class="stat-label">Toplam Gönderim</div></div>
+                        <div class="stat-card"><div class="stat-value countup" data-to="${Math.round(progress.avg_score)}">0</div><div class="stat-label">Ortalama</div></div>
+                        <div class="stat-card"><div class="stat-value countup" data-to="${Math.round(progress.best_score)}">0</div><div class="stat-label">En İyi</div></div>
+                        <div class="stat-card"><div class="stat-value countup" data-to="${Math.round(progress.weekly_avg)}">0</div><div class="stat-label">Haftalık Ort.</div></div>
+                    </div>
+                    <div class="card"><div class="card-header"><h3 class="card-title">Puan Geçmişi</h3></div><div class="chart-box" style="height:clamp(260px,40vw,360px)"><canvas id="full-chart"></canvas></div></div>
+                `;
+                done(mc);
+                if (progress.history && progress.history.length > 0) {
+                    new Chart(document.getElementById('full-chart').getContext('2d'), {
+                        type: 'bar',
+                        data: { labels: progress.history.map(h => h.title || h.date), datasets: [{ label: 'Puan', data: progress.history.map(h => h.score), backgroundColor: progress.history.map(h => h.score>=80?'rgba(52,211,153,0.7)':h.score>=60?'rgba(251,191,36,0.7)':'rgba(251,111,111,0.7)'), borderRadius: 10, maxBarThickness: 46 }] },
+                        options: { responsive: true, maintainAspectRatio: false, scales: { y:{min:0,max:100,grid:{color:'rgba(255,255,255,0.06)'}}, x:{grid:{display:false},ticks:{maxRotation:45}} }, plugins:{legend:{display:false}} }
+                    });
+                }
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function studentLeaderboard() {
+            const mc = document.getElementById('main-content');
+            try {
+                const lb = await apiGet('/api/student/leaderboard');
+
+                const lbRow = (e) => `
+                    <div class="lb-row ${e.is_me ? 'is-me' : ''}">
+                        <div class="flex gap-sm" style="align-items:center;min-width:0">
+                            <div class="rank-badge ${e.rank<=3?'rank-'+e.rank:'rank-default'}">${e.rank}</div>
+                            <span style="font-weight:700;color:var(--text-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.student_name)}</span>
+                            ${e.is_me ? '<span class="badge badge-primary">Ben</span>' : ''}
+                        </div>
+                        <div class="flex gap-sm" style="align-items:center">
+                            <span style="font-weight:800;color:${getScoreColor(e.avg_score)}">${Math.round(e.avg_score)}</span>
+                            <span class="text-xs text-muted">${e.total_submissions} gön.</span>
+                        </div>
+                    </div>`;
+
+                const podium = (list) => {
+                    if (list.length < 3) return '';
+                    const order = [list[1], list[0], list[2]];
+                    const cls = ['podium-2', 'podium-1', 'podium-3'];
+                    return `<div class="podium">${order.map((e, i) => `
+                        <div class="podium-spot ${cls[i]}">
+                            <div class="podium-ava">${esc((e.student_name || '?')[0])}</div>
+                            <div class="podium-name">${esc(e.student_name)}</div>
+                            <div class="podium-score">${Math.round(e.avg_score)}</div>
+                            <div class="podium-bar">${e.rank}</div>
+                        </div>`).join('')}</div>`;
+                };
+
+                const renderRankings = (title, list) => `
+                    <div class="card" style="min-width:0">
+                        <h3 class="mb-md">${esc(title)}</h3>
+                        ${list.length === 0 ? '<div class="empty-state"><p>Henüz sıralama yok</p></div>' :
+                        `${podium(list)}<div>${list.slice(list.length >= 3 ? 3 : 0).map(lbRow).join('')}</div>`}
+                    </div>`;
+
+                mc.innerHTML = `
+                    <div class="page-header"><h1>🏆 Sıralama</h1></div>
+                    <div class="grid grid-2">
+                        ${renderRankings(lb.branch_name, lb.branch_rankings)}
+                        ${renderRankings(lb.level_name, lb.level_rankings)}
+                    </div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function studentBadges() {
+            const mc = document.getElementById('main-content');
+            try {
+                const badges = await apiGet('/api/student/badges');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>🎖️ Rozetler</h1></div>
+                    ${badges.length === 0 ? '<div class="card"><div class="empty-state"><div class="empty-icon">🎯</div><p>Henüz rozet kazanılmadı. Pratik yapmaya devam et!</p></div></div>' :
+                    `<div class="grid grid-3 stagger">${badges.map(b => `
+                        <div class="card text-center">
+                            <div class="badge-emoji" style="font-size:3.2rem;margin-bottom:var(--space-md)">${esc(b.icon)}</div>
+                            <h3>${esc(b.name)}</h3>
+                            <p class="text-sm text-secondary mt-sm">${esc(b.description)}</p>
+                            <p class="text-xs text-muted mt-sm">Kazanıldı: ${formatDate(b.earned_at)}</p>
+                        </div>
+                    `).join('')}</div>`}
+                `;
+                done(mc);
+                if (badges.length > 0) launchConfetti();
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        // ═══════════════════════════════════════════════════
+        // ÖĞRETMEN PANELİ
+        // ═══════════════════════════════════════════════════
+        async function teacherDashboard() {
+            const mc = document.getElementById('main-content');
+            try {
+                const stats = await apiGet('/api/teacher/class-stats');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>Hoş geldiniz, <span class="text-gradient">${esc(user.ad_soyad)}</span></h1></div>
+                    <div class="grid grid-4 stagger">
+                        <div class="stat-card"><div class="stat-icon" style="background:rgba(6,182,212,0.15)">📝</div><div class="stat-value countup" data-to="${stats.total_assignments}">0</div><div class="stat-label">Ödevler</div></div>
+                        <div class="stat-card"><div class="stat-icon" style="background:rgba(34,211,238,0.15)">📨</div><div class="stat-value countup" data-to="${stats.total_submissions}">0</div><div class="stat-label">Gönderimler</div></div>
+                        <div class="stat-card"><div class="stat-icon" style="background:rgba(16,185,129,0.15)">✅</div><div class="stat-value countup" data-to="${stats.scored_submissions}">0</div><div class="stat-label">Değerlendirilen</div></div>
+                        <div class="stat-card"><div class="stat-icon" style="background:rgba(245,158,11,0.15)">📊</div><div class="stat-value countup" data-to="${Math.round(stats.avg_score)}">0</div><div class="stat-label">Ort. Puan</div></div>
+                    </div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function teacherAssignments() {
+            const mc = document.getElementById('main-content');
+            try {
+                const [assignments, paras, students] = await Promise.all([
+                    apiGet('/api/teacher/assignments'),
+                    apiGet('/api/teacher/paragraphs'),
+                    apiGet('/api/teacher/students'),
+                ]);
+                mc.innerHTML = `
+                    <div class="page-header"><h1>Ödevler</h1><button class="btn btn-primary" onclick="document.getElementById('new-assign').classList.toggle('hidden')">+ Yeni Ödev</button></div>
+                    <div class="card hidden" id="new-assign">
+                        <h3 class="mb-lg">Yeni Ödev Oluştur</h3>
+                        <form onsubmit="createAssignment(event)">
+                            <div class="grid grid-2">
+                                <div class="form-group"><label class="form-label">Paragraf</label><select id="assign-para" class="form-select" required>${paras.map(p=>`<option value="${p.id}">${esc(p.title)} (Seviye ${p.level})</option>`).join('')}</select></div>
+                                <div class="form-group"><label class="form-label">Öğrenci</label><select id="assign-student" class="form-select" required>${students.map(s=>`<option value="${s.user_id}">${esc(s.ad_soyad)} (${s.sinif_duzeyi || '-'})</option>`).join('')}</select></div>
+                            </div>
+                            <div class="form-group"><label class="form-label">Son Tarih</label><input type="date" id="assign-due" class="form-input"></div>
+                            <button type="submit" class="btn btn-primary">Ödev Oluştur</button>
+                        </form>
+                    </div>
+                    <div class="card">
+                        <div class="table-container"><table>
+                            <thead><tr><th>HEDEF</th><th>PARAGRAF</th><th>SINIF</th><th>SON TARİH</th><th>OLUŞTURMA</th></tr></thead>
+                            <tbody>${assignments.map(a=>`<tr>
+                                <td data-label="Hedef" style="font-weight:700;color:var(--text-1)">${esc(a.student_name || a.class_name || '-')}</td>
+                                <td data-label="Paragraf">${esc(a.paragraph_title)}</td>
+                                <td data-label="Sınıf">${esc(a.class_name || '-')}</td>
+                                <td data-label="Son tarih">${formatDate(a.due_date)}</td>
+                                <td data-label="Oluşturma" class="text-muted">${formatDate(a.created_at)}</td>
+                            </tr>`).join('')}</tbody>
+                        </table></div>
+                    </div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function createAssignment(e) {
+            e.preventDefault();
+            try {
+                await apiPost('/api/teacher/assignments', {
+                    paragraph_id: parseInt(document.getElementById('assign-para').value),
+                    target_type: 'student',
+                    student_ids: [parseInt(document.getElementById('assign-student').value)],
+                    due_date: document.getElementById('assign-due').value || null,
+                });
+                showAlert('Ödev oluşturuldu!', 'success');
+                teacherAssignments();
+            } catch (err) { showAlert(err.message, 'error'); }
+        }
+
+        // ── Notlandırma paneli (kılavuz görseli #2) ──────────
+        let _subsCache = [];
+        let _selectedSubId = null;
+        const GRADE_CRITS = [
+            { key: 'vocabulary', label: 'Kelime', ai: 'ai_vocabulary', t: 'teacher_vocabulary' },
+            { key: 'grammar', label: 'Dilbilgisi', ai: 'ai_grammar', t: 'teacher_grammar' },
+            { key: 'fluency', label: 'Akıcılık', ai: 'ai_fluency', t: 'teacher_fluency' },
+            { key: 'coherence', label: 'Bütünlük', ai: 'ai_coherence', t: 'teacher_coherence' },
+        ];
+        const AWARD_BADGES = [
+            { key: 'yuksek_puan', icon: '⭐', name: 'Yüksek Puan' },
+            { key: 'mukemmel_puan', icon: '🏆', name: 'Mükemmel Puan' },
+            { key: 'pratik_ustasi', icon: '🎯', name: 'Pratik Ustası' },
+            { key: 'istikrarli', icon: '💪', name: 'İstikrarlı' },
+        ];
+
+        // id'den deterministik dalga-form yükseklikleri (görsel)
+        function waveBars(id, n = 60) {
+            let seed = (id * 9301 + 49297) % 233280;
+            let out = '';
+            for (let i = 0; i < n; i++) {
+                seed = (seed * 9301 + 49297) % 233280;
+                const h = 12 + Math.floor((seed / 233280) * 96);
+                out += `<span style="height:${h}px"></span>`;
+            }
+            return out;
+        }
+
+        async function teacherSubmissions() {
+            const mc = document.getElementById('main-content');
+            try {
+                const [subs, stats] = await Promise.all([
+                    apiGet('/api/teacher/submissions'),
+                    apiGet('/api/teacher/class-stats'),
+                ]);
+                _subsCache = subs;
+                if (subs.length === 0) {
+                    mc.innerHTML = `
+                        <div class="dash-head"><h1>Öğretmen Paneli</h1><p class="sub">Öğrenci ses gönderimlerinin değerlendirmesi</p></div>
+                        <div class="card"><div class="empty-state"><div class="empty-icon">📭</div><p>Henüz gönderim yok</p></div></div>`;
+                    done(mc); return;
+                }
+                _selectedSubId = (subs.find(s => s.teacher_score == null) || subs[0]).id;
+                mc.innerHTML = `
+                    <div class="dash-head"><h1>Öğretmen Paneli</h1><p class="sub">Öğrenci ses gönderimlerinin değerlendirmesi</p></div>
+                    <div class="grade-shell">
+                        <div class="panel sub-list-panel">
+                            <div class="panel-title">Öğrenci Gönderimleri</div>
+                            <div class="sub-list" id="sub-list">
+                                <div class="sub-list-head"><span>Öğrenci</span><span>Tarih</span></div>
+                                ${subs.map(s => subRow(s)).join('')}
+                            </div>
+                        </div>
+                        <div class="panel player" id="player-col"></div>
+                        <div class="panel grade-panel" id="grade-col"></div>
+                        <div class="stats-rail">${statsRail(stats)}</div>
+                    </div>
+                `;
+                renderSelected();
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        function subRow(s) {
+            const graded = s.teacher_score != null;
+            return `<button class="sub-row ${s.id === _selectedSubId ? 'active' : ''}" id="subrow-${s.id}" onclick="selectSubmission(${s.id})">
+                <span class="sr-ava">${esc((s.student_name || '?')[0])}</span>
+                <span class="sr-main">
+                    <span class="sr-name">${esc(s.student_name)}</span>
+                    <span class="sr-status"><span class="dot-status ${graded ? 'dot-graded' : 'dot-pending'}"></span><span style="color:${graded ? 'var(--green)' : 'var(--amber)'}">${graded ? 'Değerlendirildi' : 'İnceleme bekliyor'}</span></span>
+                </span>
+                <span class="sr-time">${formatDate(s.created_at)}</span>
+            </button>`;
+        }
+
+        function selectSubmission(id) {
+            _selectedSubId = id;
+            document.querySelectorAll('.sub-row').forEach(r => r.classList.toggle('active', r.id === 'subrow-' + id));
+            renderSelected();
+        }
+
+        function renderSelected() {
+            const s = _subsCache.find(x => x.id === _selectedSubId);
+            if (!s) return;
+            // ── Orta: oynatıcı + transkript ──
+            document.getElementById('player-col').innerHTML = `
+                <div style="padding:var(--space-lg) var(--space-lg) 0">
+                    <h3>${esc(s.student_name)} — Gönderim</h3>
+                    <p class="sub-prompt">${esc(s.paragraph_title)}</p>
+                </div>
+                <div style="padding:0 var(--space-lg) var(--space-lg)">
+                    <div class="wave-display" aria-hidden="true">${waveBars(s.id)}</div>
+                    ${s.audio_path ? `<audio controls src="${esc(s.audio_path)}"></audio>` : '<p class="text-sm text-muted">Ses kaydı yok</p>'}
+                    <div class="transcript-box">${esc(s.transcript) || 'Transkript yok'}</div>
+                </div>`;
+
+            // ── Sağ: notlandırma sliderları ──
+            const init = (c) => s[c.t] != null ? s[c.t] : (s[c.ai] || 0);
+            document.getElementById('grade-col').innerHTML = `
+                <div style="padding:var(--space-lg)">
+                    <div class="panel-title" style="padding:0 0 4px">Değerlendirme Paneli</div>
+                    <p class="text-xs text-muted mb-md">Öğrenci: ${esc(s.student_name)} · AI: ${s.ai_score != null ? Math.round(s.ai_score) + '/100' : '—'}</p>
+                    ${GRADE_CRITS.map(c => `
+                        <div class="grade-crit">
+                            <div class="grade-crit-head"><span>${c.label}</span><span class="val"><span id="gv-${c.key}">${Math.round(init(c))}</span>/25</span></div>
+                            <input type="range" min="0" max="25" value="${Math.round(init(c))}" class="grade-slider" id="gs-${c.key}" oninput="updateOverall()">
+                        </div>
+                    `).join('')}
+                    <div class="overall-box"><span class="label">Genel Puan</span><span class="score"><span id="overall-score">0</span> / 100</span></div>
+                    ${s.ai_feedback ? `<div class="panel" style="margin:var(--space-md) 0;padding:var(--space-md)"><h4 style="margin:0 0 var(--space-sm)">🤖 AI Geri Bildirimi</h4><p class="text-sm" style="color:#67e8f9;white-space:pre-line">${esc(s.ai_feedback)}</p></div>` : ''}
+                    <div class="form-group"><textarea class="form-textarea" id="grade-feedback" rows="3" placeholder="Öğretmen yorumu (Türkçe)...">${esc(s.teacher_feedback) || ''}</textarea></div>
+                    <button class="btn btn-primary w-full" onclick="submitGrade()">Puanı Kaydet</button>
+                    ${s.teacher_score != null ? `<p class="text-xs" style="color:var(--green);text-align:center;margin-top:var(--space-sm)">✓ Bu gönderim değerlendirildi</p>` : ''}
+                </div>`;
+            updateOverall();
+        }
+
+        function updateOverall() {
+            let total = 0;
+            GRADE_CRITS.forEach(c => {
+                const el = document.getElementById('gs-' + c.key);
+                if (!el) return;
+                const v = parseInt(el.value, 10) || 0;
+                total += v;
+                const lbl = document.getElementById('gv-' + c.key);
+                if (lbl) lbl.textContent = v;
+                const fillPct = (v / 25) * 100;
+                el.style.background = `linear-gradient(90deg, #10b981 0%, #a855f7 ${fillPct}%, var(--surface-2) ${fillPct}%, var(--surface-2) 100%)`;
+            });
+            const o = document.getElementById('overall-score');
+            if (o) o.textContent = total;
+        }
+
+        async function submitGrade() {
+            const id = _selectedSubId;
+            const vals = {};
+            for (const c of GRADE_CRITS) vals[c.key] = parseInt(document.getElementById('gs-' + c.key).value, 10) || 0;
+            try {
+                await apiPut(`/api/teacher/submissions/${id}/score`, {
+                    vocabulary: vals.vocabulary,
+                    grammar: vals.grammar,
+                    fluency: vals.fluency,
+                    coherence: vals.coherence,
+                    teacher_feedback: document.getElementById('grade-feedback').value,
+                });
+                showAlert('Puan kaydedildi!', 'success');
+                teacherSubmissions();
+            } catch (err) { showAlert(err.message, 'error'); }
+        }
+
+        async function awardBadge(badgeKey) {
+            const s = _subsCache.find(x => x.id === _selectedSubId);
+            if (!s) { showAlert('Önce bir gönderim seçin', 'warning'); return; }
+            try {
+                const r = await apiPost('/api/teacher/badges/assign', { student_id: s.student_id, badge_name: badgeKey });
+                showAlert(r.message || 'Rozet atandı', 'success');
+            } catch (err) { showAlert(err.message, 'error'); }
+        }
+
+        function statsRail(stats) {
+            const avg = Math.round(stats.avg_score || 0);
+            const scored = stats.scored_submissions || 0;
+            const total = stats.total_submissions || 0;
+            const pct = total ? Math.round((scored / total) * 100) : 0;
+            return `
+                <div class="panel stats-card">
+                    <h4>Sınıf İstatistikleri</h4>
+                    ${svgRing({ pct: avg, size: 150, stroke: 13, big: avg, small: 'Sınıf Ort.' })}
+                </div>
+                <div class="panel stats-card">
+                    <h4>Tamamlanan Ödevler</h4>
+                    ${svgRing({ pct: pct, size: 130, stroke: 12, big: `${scored}/${total}`, small: `%${pct}`, from: '#22d3ee', to: '#10b981' })}
+                </div>
+                <div class="panel stats-card">
+                    <h4 style="margin-bottom:var(--space-sm)">Rozet & Takdir Ver</h4>
+                    <p class="text-xs text-muted" style="margin-bottom:var(--space-md)">Seçili öğrenciye rozet ata</p>
+                    <div class="award-row">
+                        ${AWARD_BADGES.map(b => `<button class="award-badge" onclick="awardBadge('${b.key}')"><span class="ab-ico">${b.icon}</span><span class="ab-name">${esc(b.name)}</span></button>`).join('')}
+                    </div>
+                </div>`;
+        }
+
+        async function teacherStudents() {
+            const mc = document.getElementById('main-content');
+            try {
+                const students = await apiGet('/api/teacher/students');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>👨‍🎓 Öğrenciler</h1></div>
+                    <div class="card"><div class="table-container"><table>
+                        <thead><tr><th>AD</th><th>SINIF</th><th>ŞUBE</th></tr></thead>
+                        <tbody>${students.map(s=>`<tr><td data-label="Ad" style="font-weight:700;color:var(--text-1)">${esc(s.ad_soyad)}</td><td data-label="Sınıf">${s.sinif_duzeyi||'-'}</td><td data-label="Şube">${esc(s.sube||'-')}</td></tr>`).join('')}</tbody>
+                    </table></div></div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function teacherParagraphs() {
+            const mc = document.getElementById('main-content');
+            try {
+                const paras = await apiGet('/api/teacher/paragraphs');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>📄 Paragraflar</h1></div>
+                    <div class="card"><div class="table-container"><table>
+                        <thead><tr><th>BAŞLIK</th><th>SEVİYE</th><th>KATEGORİ</th><th>SES</th></tr></thead>
+                        <tbody>${paras.map(p=>`<tr>
+                            <td data-label="Başlık" style="font-weight:700;color:var(--text-1)">${esc(p.title)}</td>
+                            <td data-label="Seviye">${p.level}</td>
+                            <td data-label="Kategori">${esc(p.category)}</td>
+                            <td data-label="Ses">${p.audio_path?`<audio controls src="${esc(p.audio_path)}" style="height:34px"></audio>`:'—'}</td>
+                        </tr>`).join('')}</tbody>
+                    </table></div></div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        // ═══════════════════════════════════════════════════
+        // VELİ PANELİ
+        // ═══════════════════════════════════════════════════
+        let _childrenCache = [];
+
+        async function parentDashboard() {
+            const mc = document.getElementById('main-content');
+            try {
+                const children = await apiGet('/api/parent/children');
+                _childrenCache = children;
+                mc.innerHTML = `
+                    <div class="page-header"><h1>Hoş geldiniz, <span class="text-gradient">${esc(user.ad_soyad)}</span></h1></div>
+                    ${children.length===0?'<div class="card"><div class="empty-state"><div class="empty-icon">👨‍👧</div><p>Çocuk bağlantısı yok. Lütfen yöneticiyle iletişime geçin.</p></div></div>':
+                    `<div class="grid grid-2 stagger">${children.map(c=>`
+                        <button class="task-card" style="cursor:pointer;text-align:left;border:1px solid var(--border);width:100%;font-family:inherit" onclick="loadChildDetail(${c.student_id})">
+                            <div class="flex" style="gap:var(--space-lg);align-items:center">
+                                <div class="user-avatar" style="width:60px;height:60px;font-size:1.6rem">${esc((c.ad_soyad||'?')[0])}</div>
+                                <div><h3>${esc(c.ad_soyad)}</h3><p class="text-sm text-secondary">${c.sinif_duzeyi?c.sinif_duzeyi+'. Sınıf':'—'}</p></div>
+                                <div style="margin-left:auto;font-size:1.4rem;color:var(--text-3)">›</div>
+                            </div>
+                        </button>
+                    `).join('')}</div>`}
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function loadChildDetail(sid) {
+            const child = _childrenCache.find(c => c.student_id === sid);
+            const name = child ? child.ad_soyad : '';
+            const mc = document.getElementById('main-content');
+            mc.innerHTML = '<div class="flex-center" style="height:50vh"><div class="spinner"></div></div>';
+            try {
+                const [progress,scores,badges,lb] = await Promise.all([
+                    apiGet(`/api/parent/children/${sid}/progress`),
+                    apiGet(`/api/parent/children/${sid}/scores`),
+                    apiGet(`/api/parent/children/${sid}/badges`),
+                    apiGet(`/api/parent/children/${sid}/leaderboard`)
+                ]);
+                mc.innerHTML = `
+                    <div class="page-header">
+                        <h1>${esc(name)} — İlerleme</h1>
+                        <button class="btn btn-secondary" onclick="parentDashboard()">← Geri</button>
+                    </div>
+
+                    <div class="grid grid-2" style="margin-bottom:var(--space-xl)">
+                        <div class="card">
+                            <h3 style="margin-bottom:var(--space-sm)">🏆 Sıralama</h3>
+                            <div class="text-sm text-secondary" style="line-height:2">
+                                <p><strong style="color:var(--text-1)">Genel (${esc(lb.level_name)}):</strong> ${lb.level_rank || '-'} / ${lb.total_in_level}</p>
+                                <p><strong style="color:var(--text-1)">Sınıf İçi (${esc(lb.branch_name)}):</strong> ${lb.branch_rank || '-'} / ${lb.total_in_branch}</p>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <h3 style="margin-bottom:var(--space-sm)">🎖️ Son Rozetler</h3>
+                            ${badges.length === 0 ? '<p class="text-sm text-secondary">Henüz rozet yok.</p>' :
+                            `<div class="flex gap-sm" style="flex-wrap:wrap">${badges.slice(0,4).map(b => `<div class="badge-tile" style="min-width:72px" title="${esc(b.name)}"><div class="badge-emoji">${esc(b.icon)}</div></div>`).join('')}</div>`
+                            }
+                        </div>
+                    </div>
+
+                    <div class="grid grid-4 stagger" style="margin-bottom:var(--space-xl)">
+                        <div class="stat-card"><div class="stat-value countup" data-to="${progress.total_submissions}">0</div><div class="stat-label">Gönderim</div></div>
+                        <div class="stat-card"><div class="stat-value countup" data-to="${Math.round(progress.avg_score)}">0</div><div class="stat-label">Ortalama</div></div>
+                        <div class="stat-card"><div class="stat-value countup" data-to="${Math.round(progress.best_score)}">0</div><div class="stat-label">En İyi</div></div>
+                        <div class="stat-card"><div class="stat-value countup" data-to="${Math.round(progress.weekly_avg)}">0</div><div class="stat-label">Haftalık</div></div>
+                    </div>
+
+                    <div class="card"><div class="card-header"><h3 class="card-title">📊 Son Değerlendirmeler</h3></div>
+                        <div class="table-container"><table>
+                            <thead><tr><th>Görev</th><th>Nihai Puan</th><th>Öğretmen Yorumu</th><th>AI Yorumu</th><th>Tarih</th></tr></thead>
+                            <tbody>${scores.map(s=>`<tr>
+                                <td data-label="Görev" style="font-weight:700;color:var(--text-1)">${esc(s.paragraph_title)}</td>
+                                <td data-label="Nihai puan">${getScoreBadge(s.final_score)}</td>
+                                <td data-label="Öğretmen"><p class="text-xs" style="max-width:220px;white-space:normal;color:var(--green)">${esc(s.teacher_feedback) || '—'}</p></td>
+                                <td data-label="AI"><p class="text-xs" style="max-width:220px;white-space:normal;color:#67e8f9">${esc(s.ai_feedback) || '—'}</p></td>
+                                <td data-label="Tarih" class="text-muted text-sm">${formatDate(s.created_at)}</td>
+                            </tr>`).join('')}</tbody>
+                        </table></div>
+                    </div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        // ═══════════════════════════════════════════════════
+        // YÖNETİCİ PANELİ
+        // ═══════════════════════════════════════════════════
+        async function adminDashboard() {
+            const mc = document.getElementById('main-content');
+            try {
+                const stats = await apiGet('/api/admin/stats');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>Yönetici Paneli</h1></div>
+                    <div class="grid grid-4 stagger">
+                        <div class="stat-card"><div class="stat-icon" style="background:rgba(6,182,212,0.15)">👥</div><div class="stat-value countup" data-to="${stats.total_users}">0</div><div class="stat-label">Toplam Kullanıcı</div></div>
+                        <div class="stat-card"><div class="stat-icon" style="background:rgba(245,158,11,0.15)">⏳</div><div class="stat-value countup" data-to="${stats.pending_users}">0</div><div class="stat-label">Onay Bekleyen</div></div>
+                        <div class="stat-card"><div class="stat-icon" style="background:rgba(16,185,129,0.15)">📄</div><div class="stat-value countup" data-to="${stats.total_paragraphs}">0</div><div class="stat-label">Paragraf</div></div>
+                        <div class="stat-card"><div class="stat-icon" style="background:rgba(34,211,238,0.15)">📨</div><div class="stat-value countup" data-to="${stats.total_submissions}">0</div><div class="stat-label">Gönderim</div></div>
+                    </div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function adminUsers() {
+            const mc = document.getElementById('main-content');
+            try {
+                const users = await apiGet('/api/admin/users');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>Kullanıcı Yönetimi</h1></div>
+                    <div class="card"><div class="table-container"><table>
+                        <thead><tr><th>AD</th><th>E-POSTA</th><th>ROL</th><th>DURUM</th><th>İŞLEMLER</th></tr></thead>
+                        <tbody>${users.map(u=>`<tr>
+                            <td data-label="Ad" style="font-weight:700;color:var(--text-1)">${esc(u.ad_soyad)}</td>
+                            <td data-label="E-posta">${esc(u.email)}</td>
+                            <td data-label="Rol">${esc(getRoleName(u.rol))}</td>
+                            <td data-label="Durum">${getStatusBadge(u.status)}</td>
+                            <td data-label="İşlemler">
+                                <div class="flex gap-sm" style="flex-wrap:wrap;justify-content:flex-end">
+                                ${u.status==='pending'?`<button class="btn btn-sm btn-success" onclick="adminAction('approve',${u.id})">Onayla</button> <button class="btn btn-sm btn-danger" onclick="adminAction('reject',${u.id})">Reddet</button>`:
+                                u.status==='active'?`<button class="btn btn-sm btn-secondary" onclick="adminAction('deactivate',${u.id})">Devre Dışı</button>`:
+                                `<button class="btn btn-sm btn-success" onclick="adminAction('approve',${u.id})">Aktifleştir</button>`}
+                                </div>
+                            </td>
+                        </tr>`).join('')}</tbody>
+                    </table></div></div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function adminSubmissions() {
+            const mc = document.getElementById('main-content');
+            try {
+                const subs = await apiGet('/api/admin/submissions');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>Gönderimler</h1></div>
+                    <div class="card"><div class="table-container"><table>
+                        <thead><tr><th>ÖĞRENCİ</th><th>PARAGRAF</th><th>AI PUAN</th><th>AI GERİ BİLDİRİMİ</th><th>ÖĞRETMEN GERİ BİLDİRİMİ</th><th>DURUM</th></tr></thead>
+                        <tbody>${subs.length ? subs.map(s=>`<tr>
+                            <td data-label="Öğrenci" style="font-weight:700;color:var(--text-1)">${esc(s.student_name)}</td>
+                            <td data-label="Paragraf">${esc(s.paragraph_title)}</td>
+                            <td data-label="AI Puan">${s.ai_score != null ? Math.round(s.ai_score) + '/100' : '—'}</td>
+                            <td data-label="AI Geri Bildirimi"><p class="text-xs" style="max-width:260px;white-space:normal;color:#67e8f9">${esc(s.ai_feedback) || '—'}</p></td>
+                            <td data-label="Öğretmen Geri Bildirimi"><p class="text-xs" style="max-width:260px;white-space:normal;color:var(--green)">${esc(s.teacher_feedback) || '—'}</p></td>
+                            <td data-label="Durum">${esc(s.status)}</td>
+                        </tr>`).join('') : `<tr><td colspan="6" class="text-center text-muted">Henüz gönderim yok</td></tr>`}</tbody>
+                    </table></div></div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function adminAction(action,id){
+            try{
+                if(action==='approve')await apiPut(`/api/admin/users/${id}/approve`);
+                else if(action==='reject')await apiPut(`/api/admin/users/${id}/reject`);
+                else await apiPut(`/api/admin/users/${id}/status`,{status:'inactive'});
+                showAlert('İşlem tamamlandı','success');adminUsers();
+            }catch(err){showAlert(err.message,'error');}
+        }
+
+        // Global cache for paragraph data
+        let _paragraphCache = [];
+
+        async function adminParagraphs() {
+            const mc = document.getElementById('main-content');
+            try {
+                const paras = await apiGet('/api/admin/paragraphs');
+                _paragraphCache = paras;
+                mc.innerHTML = `
+                    <div class="page-header"><h1>Paragraf Yönetimi</h1><button class="btn btn-primary" onclick="document.getElementById('new-para').classList.toggle('hidden')">+ Yeni Paragraf</button></div>
+                    <div class="card hidden" id="new-para">
+                        <h3 class="mb-lg">Yeni Paragraf Ekle</h3>
+                        <form onsubmit="createParagraph(event)">
+                            <div class="grid grid-2">
+                                <div class="form-group"><label class="form-label">Başlık</label><input type="text" id="para-title" class="form-input" required></div>
+                                <div class="form-group"><label class="form-label">Seviye</label><select id="para-level" class="form-select"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></div>
+                            </div>
+                            <div class="form-group"><label class="form-label">Metin (İngilizce)</label><textarea id="para-text" class="form-textarea" rows="5" required placeholder="İngilizce paragraf metnini buraya yazın..."></textarea></div>
+                            <div class="form-group"><label class="form-label">Kategori</label><input type="text" id="para-cat" class="form-input" value="Genel"></div>
+                            <button type="submit" class="btn btn-primary" id="create-para-btn">Paragraf Ekle</button>
+                        </form>
+                    </div>
+
+                    <!-- Edit modal overlay -->
+                    <div id="edit-modal" class="hidden" style="position:fixed;inset:0;background:rgba(5,4,10,0.7);backdrop-filter:blur(4px);z-index:999;display:flex;align-items:center;justify-content:center;padding:var(--space-md)">
+                        <div class="card" style="max-width:700px;width:100%;max-height:86vh;overflow-y:auto;margin:0">
+                            <div class="flex-between mb-lg">
+                                <h3 id="edit-modal-title">Paragraf Düzenle</h3>
+                                <button class="btn btn-sm btn-secondary" onclick="closeEditModal()">✕ Kapat</button>
+                            </div>
+                            <form onsubmit="saveEditParagraph(event)">
+                                <input type="hidden" id="edit-para-id">
+                                <div class="form-group"><label class="form-label">Başlık</label><input type="text" id="edit-para-title" class="form-input" required></div>
+                                <div class="grid grid-2">
+                                    <div class="form-group"><label class="form-label">Seviye</label><select id="edit-para-level" class="form-select"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></div>
+                                    <div class="form-group"><label class="form-label">Kategori</label><input type="text" id="edit-para-cat" class="form-input"></div>
+                                </div>
+                                <div class="form-group"><label class="form-label">Metin (İngilizce)</label><textarea id="edit-para-text" class="form-textarea" rows="6" required></textarea></div>
+                                <div class="flex gap-sm">
+                                    <button type="submit" class="btn btn-primary">💾 Kaydet</button>
+                                    <button type="button" class="btn btn-secondary" onclick="closeEditModal()">İptal</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card"><div class="table-container"><table>
+                        <thead><tr><th>BAŞLIK</th><th>SEVİYE</th><th>KATEGORİ</th><th>ONAY</th><th>SES</th><th>İŞLEMLER</th></tr></thead>
+                        <tbody>${paras.map(p=>`<tr>
+                            <td data-label="Başlık" style="font-weight:700;color:var(--text-1)">${esc(p.title)}</td>
+                            <td data-label="Seviye">${p.level}</td>
+                            <td data-label="Kategori">${esc(p.category||'-')}</td>
+                            <td data-label="Onay">${p.approved?'<span class="badge badge-success">ONAYLI</span>':'<span class="badge badge-warning">BEKLİYOR</span>'}</td>
+                            <td data-label="Ses">
+                                ${p.audio_path?`<audio controls src="${esc(p.audio_path)}" style="height:34px"></audio><br><button class="btn btn-sm btn-secondary" style="margin-top:4px" onclick="regenAudio(${p.id},this)">🔄 Yeniden</button>`:`<button class="btn btn-sm btn-secondary" onclick="regenAudio(${p.id},this)">🔊 Ses Oluştur</button>`}
+                            </td>
+                            <td data-label="İşlemler">
+                                <div class="flex gap-sm" style="flex-wrap:wrap;justify-content:flex-end">
+                                <button class="btn btn-sm btn-primary" onclick="openEditModal(${p.id})">Düzenle</button>
+                                <button class="btn btn-sm btn-info" onclick="showQuestions(${p.id})">Sorular</button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteParagraph(${p.id})">Sil</button>
+                                </div>
+                            </td>
+                        </tr>`).join('')}</tbody>
+                    </table></div></div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        function openEditModal(id) {
+            const p = _paragraphCache.find(x => x.id === id);
+            if (!p) { showAlert('Paragraf bulunamadı','error'); return; }
+            document.getElementById('edit-para-id').value = p.id;
+            document.getElementById('edit-para-title').value = p.title;
+            document.getElementById('edit-para-level').value = p.level;
+            document.getElementById('edit-para-cat').value = p.category || '';
+            document.getElementById('edit-para-text').value = p.text;
+            document.getElementById('edit-modal-title').textContent = 'Paragraf Düzenle — ' + p.title;
+            const modal = document.getElementById('edit-modal');
+            modal.classList.remove('hidden');
+            modal.style.display = 'flex';
+        }
+
+        function closeEditModal() {
+            const modal = document.getElementById('edit-modal');
+            modal.classList.add('hidden');
+            modal.style.display = 'none';
+        }
+
+        async function saveEditParagraph(e) {
+            e.preventDefault();
+            const id = document.getElementById('edit-para-id').value;
+            try {
+                await apiPut(`/api/admin/paragraphs/${id}`, {
+                    title: document.getElementById('edit-para-title').value,
+                    text: document.getElementById('edit-para-text').value,
+                    level: parseInt(document.getElementById('edit-para-level').value),
+                    category: document.getElementById('edit-para-cat').value,
+                });
+                closeEditModal();
+                showAlert('Paragraf güncellendi!', 'success');
+                adminParagraphs();
+            } catch (err) { showAlert(err.message, 'error'); }
+        }
+
+        async function createParagraph(e){
+            e.preventDefault();
+            const btn = document.getElementById('create-para-btn');
+            btn.disabled = true; btn.textContent = '⏳ Oluşturuluyor...';
+            try{
+                await apiPost('/api/admin/paragraphs',{
+                    title: document.getElementById('para-title').value,
+                    text: document.getElementById('para-text').value,
+                    level: parseInt(document.getElementById('para-level').value),
+                    category: document.getElementById('para-cat').value
+                });
+                showAlert('Paragraf oluşturuldu! Ses dosyası arka planda oluşturulacak.','success');
+                adminParagraphs();
+            } catch(err) { showAlert(err.message,'error'); }
+            finally { btn.disabled = false; btn.textContent = 'Paragraf Ekle'; }
+        }
+
+        async function deleteParagraph(id){
+            if(!confirm('Bu paragrafı silmek istediğinize emin misiniz?')) return;
+            try { await apiDelete(`/api/admin/paragraphs/${id}`); showAlert('Paragraf silindi','success'); adminParagraphs(); }
+            catch(err) { showAlert(err.message,'error'); }
+        }
+
+        async function regenAudio(id, btn){
+            if(btn) { btn.disabled = true; btn.textContent = '⏳ Oluşturuluyor...'; }
+            try {
+                const r = await apiPost(`/api/admin/paragraphs/${id}/regenerate-audio`);
+                showAlert(r.message,'success');
+                adminParagraphs();
+            } catch(err) {
+                showAlert('Ses oluşturma başarısız: ' + err.message,'error');
+                if(btn) { btn.disabled = false; btn.textContent = '🔊 Ses Oluştur'; }
+            }
+        }
+
+        async function showQuestions(id) {
+            const mc = document.getElementById('main-content');
+            try {
+                const [questions, paras] = await Promise.all([
+                    apiGet(`/api/admin/paragraphs/${id}/questions`),
+                    apiGet('/api/admin/paragraphs'),
+                ]);
+                const para = paras.find(p => p.id === id);
+                mc.innerHTML = `
+                    <div class="page-header">
+                        <h1>📝 Sorular — ${para ? esc(para.title) : 'Paragraf #'+id}</h1>
+                        <button class="btn btn-secondary" onclick="adminParagraphs()">← Geri</button>
+                    </div>
+                    ${para ? `<div class="card mb-lg"><p class="text-sm text-secondary">${esc(para.text)}</p></div>` : ''}
+                    <div class="card mb-lg">
+                        <h4 class="mb-md">Yeni Soru Ekle</h4>
+                        <form onsubmit="createQuestion(event, ${id})">
+                            <div class="form-group"><label class="form-label">Soru Metni</label><input type="text" id="q-text" class="form-input" required></div>
+                            <div class="grid grid-2">
+                                <div class="form-group"><label class="form-label">A Şıkkı</label><input type="text" id="q-a" class="form-input" required></div>
+                                <div class="form-group"><label class="form-label">B Şıkkı</label><input type="text" id="q-b" class="form-input" required></div>
+                                <div class="form-group"><label class="form-label">C Şıkkı</label><input type="text" id="q-c" class="form-input" required></div>
+                                <div class="form-group"><label class="form-label">D Şıkkı</label><input type="text" id="q-d" class="form-input" required></div>
+                            </div>
+                            <div class="form-group"><label class="form-label">Doğru Cevap</label><select id="q-ans" class="form-select"><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></div>
+                            <button type="submit" class="btn btn-primary">Soru Ekle</button>
+                        </form>
+                    </div>
+                    ${questions.length === 0 ? '<div class="card"><div class="empty-state"><p>Henüz soru eklenmemiş</p></div></div>' :
+                    `<div class="card"><div class="table-container"><table>
+                        <thead><tr><th>#</th><th>SORU</th><th>A</th><th>B</th><th>C</th><th>D</th><th>CEVAP</th><th>İŞLEM</th></tr></thead>
+                        <tbody>${questions.map((q,i)=>`<tr>
+                            <td data-label="#">${i+1}</td>
+                            <td data-label="Soru" style="font-weight:700;color:var(--text-1)">${esc(q.question_text)}</td>
+                            <td data-label="A">${esc(q.option_a)}</td><td data-label="B">${esc(q.option_b)}</td><td data-label="C">${esc(q.option_c)}</td><td data-label="D">${esc(q.option_d)}</td>
+                            <td data-label="Cevap"><span class="badge badge-success">${esc(q.correct_answer)}</span></td>
+                            <td data-label="İşlem"><button class="btn btn-sm btn-danger" onclick="deleteQuestion(${q.id},${id})">Sil</button></td>
+                        </tr>`).join('')}</tbody>
+                    </table></div></div>`}
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        async function createQuestion(e, paraId) {
+            e.preventDefault();
+            try {
+                await apiPost(`/api/admin/paragraphs/${paraId}/questions`, {
+                    question_text: document.getElementById('q-text').value,
+                    option_a: document.getElementById('q-a').value,
+                    option_b: document.getElementById('q-b').value,
+                    option_c: document.getElementById('q-c').value,
+                    option_d: document.getElementById('q-d').value,
+                    correct_answer: document.getElementById('q-ans').value,
+                });
+                showAlert('Soru eklendi!', 'success');
+                showQuestions(paraId);
+            } catch (err) { showAlert(err.message, 'error'); }
+        }
+
+        async function deleteQuestion(qId, paraId) {
+            if (!confirm('Bu soruyu silmek istediğinize emin misiniz?')) return;
+            try { await apiDelete(`/api/admin/questions/${qId}`); showAlert('Soru silindi', 'success'); showQuestions(paraId); }
+            catch (err) { showAlert(err.message, 'error'); }
+        }
+
+        async function adminStats() {
+            const mc = document.getElementById('main-content');
+            try {
+                const stats = await apiGet('/api/admin/stats');
+                mc.innerHTML = `
+                    <div class="page-header"><h1>📈 İstatistikler</h1></div>
+                    <div class="grid grid-4 stagger">
+                        <div class="stat-card"><div class="stat-value countup" data-to="${stats.students}">0</div><div class="stat-label">Öğrenci</div></div>
+                        <div class="stat-card"><div class="stat-value countup" data-to="${stats.teachers}">0</div><div class="stat-label">Öğretmen</div></div>
+                        <div class="stat-card"><div class="stat-value countup" data-to="${stats.parents}">0</div><div class="stat-label">Veli</div></div>
+                        <div class="stat-card"><div class="stat-value countup" data-to="${stats.active_users}">0</div><div class="stat-label">Aktif Kullanıcı</div></div>
+                    </div>
+                `;
+                done(mc);
+            } catch (err) { mc.innerHTML = `<div class="alert alert-error"><span>✕</span><span>${esc(err.message)}</span></div>`; }
+        }
+
+        // ── Profil ───────────────────────────────────────
+        function loadProfile() {
+            setActiveNav('profile');
+            const mc = document.getElementById('main-content');
+            mc.innerHTML = `
+                <div class="page-header"><h1>⚙️ Profil Ayarları</h1></div>
+                <div class="card" style="max-width:520px">
+                    <form onsubmit="updateProfile(event)">
+                        <div class="form-group"><label class="form-label">Ad Soyad</label><input type="text" id="prof-name" class="form-input" value="${esc(user.ad_soyad)}"></div>
+                        <div class="form-group"><label class="form-label">E-Posta</label><input type="email" id="prof-email" class="form-input" value="${esc(user.email)}"></div>
+                        <div class="form-group"><label class="form-label">Mevcut Şifre <span class="text-xs text-muted">(e-posta/şifre değişikliği için)</span></label><input type="password" id="prof-current-pass" class="form-input" placeholder="Mevcut şifreniz" autocomplete="current-password"></div>
+                        <div class="form-group"><label class="form-label">Yeni Şifre</label><input type="password" id="prof-pass" class="form-input" placeholder="Değiştirmek istemiyorsanız boş bırakın" autocomplete="new-password"></div>
+                        <button type="submit" class="btn btn-primary">Kaydet</button>
+                    </form>
+                </div>
+            `;
+            done(mc);
+        }
+        async function updateProfile(e){
+            e.preventDefault();
+            try{
+                const data={};
+                const n=document.getElementById('prof-name').value,em=document.getElementById('prof-email').value,p=document.getElementById('prof-pass').value;
+                const cur=document.getElementById('prof-current-pass').value;
+                if(n!==user.ad_soyad)data.ad_soyad=n;
+                if(em!==user.email)data.email=em;
+                if(p)data.password=p;
+                // E-posta/şifre değişiminde backend mevcut şifre ister.
+                if((data.email||data.password)&&cur)data.current_password=cur;
+                const res=await apiPut('/api/auth/profile',data);
+                if(res&&res.user){Auth.setUser(res.user);user.ad_soyad=res.user.ad_soyad;user.email=res.user.email;}
+                buildSidebar(user);
+                showAlert('Profil güncellendi!','success');
+            }catch(err){showAlert(err.message,'error');}
+        }
+    </script>
+</body>
+</html>

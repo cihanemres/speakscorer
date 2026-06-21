@@ -1,0 +1,48 @@
+# ── Environment & Secrets ─────────────────────────────────
+.env
+*.env
+!.env.example
+# Üretim ortam dosyası gerçek sırları içerir — ASLA commit'lenmemeli.
+# (*.env deseni .env.production'ı yakalamaz; o yüzden açıkça ekliyoruz.)
+.env.production
+!.env.production.example
+
+# ── Kalıcı veri (Oracle VM'de docker volume bind-mount'ları) ──
+/data/
+
+# ── Database ──────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# ── Uploads (user-generated content) ─────────────────────
+backend/uploads/
+
+# ── IDE ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+testsprite_tests\tmp\config.json
+
+# ── Runtime logs ──
+*.log
