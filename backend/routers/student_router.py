@@ -285,8 +285,10 @@ async def submit_recording(
     ALLOWED_AUDIO_TYPES = {"audio/webm", "audio/wav", "audio/mp3", "audio/ogg",
                            "audio/mpeg", "audio/mp4", "audio/x-m4a", "video/webm"}
 
-    # Validate content type
-    if audio.content_type and audio.content_type not in ALLOWED_AUDIO_TYPES:
+    # Validate content type — tarayıcı MIME tipine codec parametresi ekleyebilir
+    # (örn. "audio/webm;codecs=opus"); karşılaştırmadan önce yalnızca temel tipi al.
+    base_type = (audio.content_type or "").split(";")[0].strip().lower()
+    if base_type and base_type not in ALLOWED_AUDIO_TYPES:
         raise HTTPException(400, f"Desteklenmeyen dosya türü: {audio.content_type}. Sadece ses dosyası yüklenebilir.")
 
     content = await audio.read()
